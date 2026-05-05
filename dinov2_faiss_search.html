@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DINOv2 · FAISS similarity search</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --surface: #1a222c;
+      --border: #2d3a47;
+      --text: #e8eef4;
+      --muted: #8b9aab;
+      --accent: #3d9a6e;
+      --accent-dim: #2d7352;
+      --warn: #c9a227;
+      --danger: #c75c5c;
+      --radius: 10px;
+      --font: "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .wrap {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+    }
+
+    header h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.35rem;
+    }
+
+    header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .badge {
+      display: inline-block;
+      margin-top: 0.75rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      gap: 1.25rem;
+      margin-top: 1.75rem;
+    }
+
+    @media (min-width: 720px) {
+      .grid {
+        grid-template-columns: 1fr 1fr;
+        align-items: start;
+      }
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.35rem;
+    }
+
+    .card h2 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+      margin: 0 0 0.85rem;
+    }
+
+    .flow {
+      font-size: 0.88rem;
+      color: var(--muted);
+      margin: 0;
+      padding-left: 1.1rem;
+    }
+
+    .flow li {
+      margin-bottom: 0.35rem;
+    }
+
+    .flow code {
+      font-size: 0.82em;
+      background: var(--bg);
+      padding: 0.12rem 0.35rem;
+      border-radius: 4px;
+      color: var(--text);
+    }
+
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .dropzone:hover,
+    .dropzone:focus-within {
+      border-color: var(--accent);
+      background: rgba(61, 154, 110, 0.06);
+    }
+
+    .dropzone p {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .dropzone strong {
+      color: var(--accent);
+    }
+
+    input[type="file"] {
+      display: none;
+    }
+
+    .preview {
+      margin-top: 1rem;
+      display: none;
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      max-height: 220px;
+      background: var(--bg);
+    }
+
+    .preview img {
+      display: block;
+      width: 100%;
+      height: auto;
+      object-fit: contain;
+      max-height: 220px;
+    }
+
+    .preview.visible {
+      display: block;
+    }
+
+    .preview img {
+      cursor: zoom-in;
+    }
+
+    .img-modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      z-index: 50;
+      background: rgba(10, 13, 17, 0.85);
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .img-modal.visible {
+      display: flex;
+    }
+
+    .img-modal-card {
+      width: min(100%, 980px);
+      max-height: calc(100vh - 2rem);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .img-modal-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.6rem 0.8rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .img-modal-bar .spacer {
+      flex: 1;
+    }
+
+    .img-modal-btn {
+      min-width: 2.1rem;
+      padding: 0.35rem 0.55rem;
+      font-size: 0.95rem;
+      line-height: 1;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .img-modal-btn:hover {
+      border-color: var(--muted);
+    }
+
+    .img-modal-zoom-label {
+      font-size: 0.82rem;
+      color: var(--muted);
+      min-width: 3.4rem;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .img-modal-body {
+      background: var(--bg);
+      min-height: 260px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      padding: 0.75rem;
+    }
+
+    .img-modal-body img {
+      max-width: 100%;
+      max-height: calc(100vh - 140px);
+      transform-origin: center center;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      margin-top: 1rem;
+      align-items: center;
+    }
+
+    button {
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 0.55rem 1.1rem;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--accent-dim);
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    button.secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    button.secondary:hover:not(:disabled) {
+      border-color: var(--muted);
+      color: var(--text);
+    }
+
+    .status {
+      margin-top: 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      display: none;
+    }
+
+    .status.visible {
+      display: block;
+    }
+
+    .status.info {
+      background: rgba(61, 154, 110, 0.12);
+      border: 1px solid var(--accent);
+      color: var(--text);
+    }
+
+    .status.warn {
+      background: rgba(201, 162, 39, 0.12);
+      border: 1px solid var(--warn);
+      color: #e8d9a8;
+    }
+
+    .status.err {
+      background: rgba(199, 92, 92, 0.12);
+      border: 1px solid var(--danger);
+      color: #f0c0c0;
+    }
+
+    .results {
+      margin-top: 1.75rem;
+    }
+
+    .results h3 {
+      font-size: 0.95rem;
+      margin: 0 0 0.75rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 0.55rem 0.65rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .score {
+      font-variant-numeric: tabular-nums;
+      color: var(--accent);
+    }
+
+    footer {
+      margin-top: 2.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    footer code {
+      background: var(--surface);
+      padding: 0.1rem 0.35rem;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>DINOv2 similarity search (FAISS)</h1>
+      <p>
+        Offline: gallery images → DINOv2 backbone → L2-normalized vectors → FAISS index.
+        Online: query image → same backbone → ANN search → re-rank (metadata / geo) in your service layer.
+      </p>
+      <span class="badge">UI first · embeddings &amp; API optional</span>
+    </header>
+
+    <div class="grid">
+      <section class="card" aria-labelledby="offline-title">
+        <h2 id="offline-title">Before embeddings exist</h2>
+        <ol class="flow">
+          <li>Train or freeze DINOv2; use the same resize + ImageNet normalize as <code>predict_dino.py</code>.</li>
+          <li>Batch-encode the gallery; stack vectors (e.g. <code>float32</code>, <code>N × 384</code> for ViT-S/14).</li>
+          <li>Build FAISS (<code>IndexFlatIP</code> on normalized vectors, or HNSW for speed).</li>
+          <li>Store parallel metadata (specimen id, species label, path, geo) for each row index.</li>
+          <li>Expose a small HTTP API that accepts an image and returns top‑K neighbors + scores (see footer).</li>
+        </ol>
+      </section>
+
+      <section class="card" aria-labelledby="query-title">
+        <h2 id="query-title">Query (prototype)</h2>
+        <label class="dropzone" id="dz" tabindex="0">
+          <input type="file" id="file" accept="image/*" />
+          <p><strong>Choose</strong> or drop a herbarium scan</p>
+          <p style="margin-top:0.35rem;font-size:0.8rem;">JPEG / PNG · one image</p>
+        </label>
+        <div class="preview" id="preview" aria-hidden="true">
+          <img id="previewImg" alt="Query preview" />
+        </div>
+        <div class="row">
+          <button type="button" id="searchBtn" disabled>Search FAISS</button>
+          <button type="button" class="secondary" id="clearBtn">Clear</button>
+        </div>
+        <div class="status info" id="statusInfo"></div>
+        <div class="status warn" id="statusWarn"></div>
+        <div class="status err" id="statusErr"></div>
+      </section>
+    </div>
+
+    <section class="card results" id="resultsSection" style="display:none;">
+      <h3>Top matches</h3>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Species</th>
+              <th>Score</th>
+              <th>Specimen / id</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p>
+        <strong>API:</strong> when this page is opened from the Flask app (<code>/ui</code>), requests go to
+        same-origin <code>/query</code>. If you open this file via <code>file://</code>, set the fallback host below.
+        <code>POST</code> multipart field <code>image</code>. Example JSON:
+        <code>{ "results": [ { "rank": 1, "species": "acuminata", "score": 0.91, "specimen_id": "CAL0000" } ] }</code>.
+        Leave <code>API_URL</code> empty to run <strong>demo mode</strong>.
+      </p>
+    </footer>
+  </div>
+
+  <div class="img-modal" id="imgModal" aria-hidden="true">
+    <div class="img-modal-card" role="dialog" aria-modal="true" aria-label="Image zoom viewer">
+      <div class="img-modal-bar">
+        <button type="button" class="img-modal-btn" id="modalZoomOutBtn" aria-label="Zoom out">−</button>
+        <span class="img-modal-zoom-label" id="modalZoomLabel">100%</span>
+        <button type="button" class="img-modal-btn" id="modalZoomInBtn" aria-label="Zoom in">+</button>
+        <div class="spacer"></div>
+        <button type="button" class="img-modal-btn" id="modalCloseBtn" aria-label="Close viewer">Close</button>
+      </div>
+      <div class="img-modal-body">
+        <img id="modalImg" alt="Large preview" />
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      /**
+       * Same-origin /query when served from dinov2_faiss_server.py (/ui).
+       * file:// opens use the fallback below (change port if needed).
+       */
+      const API_URL_FILE_FALLBACK = "http://127.0.0.1:8765/query";
+      const API_URL =
+        typeof location !== "undefined" && location.protocol !== "file:"
+          ? new URL("/query", location.origin).href
+          : API_URL_FILE_FALLBACK;
+
+      const dz = document.getElementById("dz");
+      const fileInput = document.getElementById("file");
+      const preview = document.getElementById("preview");
+      const previewImg = document.getElementById("previewImg");
+      const imgModal = document.getElementById("imgModal");
+      const modalImg = document.getElementById("modalImg");
+      const modalZoomOutBtn = document.getElementById("modalZoomOutBtn");
+      const modalZoomInBtn = document.getElementById("modalZoomInBtn");
+      const modalZoomLabel = document.getElementById("modalZoomLabel");
+      const modalCloseBtn = document.getElementById("modalCloseBtn");
+      const searchBtn = document.getElementById("searchBtn");
+      const clearBtn = document.getElementById("clearBtn");
+      const statusInfo = document.getElementById("statusInfo");
+      const statusWarn = document.getElementById("statusWarn");
+      const statusErr = document.getElementById("statusErr");
+      const resultsSection = document.getElementById("resultsSection");
+      const tbody = document.getElementById("tbody");
+
+      let currentFile = null;
+      let currentPreviewUrl = "";
+      const ZOOM_MIN = 0.5;
+      const ZOOM_MAX = 3.0;
+      const ZOOM_STEP = 0.1;
+      let modalZoomLevel = 1.0;
+
+      function applyModalZoom() {
+        modalImg.style.transform = "scale(" + modalZoomLevel + ")";
+        modalZoomLabel.textContent = Math.round(modalZoomLevel * 100) + "%";
+      }
+
+      function setModalZoom(nextZoom) {
+        modalZoomLevel = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, nextZoom));
+        modalZoomLevel = Math.round(modalZoomLevel * 10) / 10;
+        applyModalZoom();
+      }
+
+      function openImageModal() {
+        if (!previewImg.src) return;
+        modalImg.src = previewImg.src;
+        setModalZoom(1.0);
+        imgModal.classList.add("visible");
+        imgModal.setAttribute("aria-hidden", "false");
+      }
+
+      function closeImageModal() {
+        imgModal.classList.remove("visible");
+        imgModal.setAttribute("aria-hidden", "true");
+        modalImg.removeAttribute("src");
+      }
+
+      function hideStatuses() {
+        [statusInfo, statusWarn, statusErr].forEach(function (el) {
+          el.classList.remove("visible");
+          el.textContent = "";
+        });
+      }
+
+      function showDemoBanner() {
+        statusWarn.textContent =
+          API_URL
+            ? ""
+            : "Demo mode: no API_URL set. Results are fake until your FAISS query service is running.";
+        statusWarn.classList.toggle("visible", !API_URL);
+      }
+
+      function setPreview(file) {
+        if (!file || !file.type.startsWith("image/")) return;
+        currentFile = file;
+        if (currentPreviewUrl) {
+          URL.revokeObjectURL(currentPreviewUrl);
+          currentPreviewUrl = "";
+        }
+        var url = URL.createObjectURL(file);
+        currentPreviewUrl = url;
+        previewImg.src = url;
+        preview.classList.add("visible");
+        preview.setAttribute("aria-hidden", "false");
+        searchBtn.disabled = false;
+        hideStatuses();
+        showDemoBanner();
+        resultsSection.style.display = "none";
+      }
+
+      dz.addEventListener("click", function () {
+        fileInput.click();
+      });
+
+      dz.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          fileInput.click();
+        }
+      });
+
+      fileInput.addEventListener("change", function () {
+        var f = fileInput.files && fileInput.files[0];
+        if (f) setPreview(f);
+      });
+
+      ["dragenter", "dragover"].forEach(function (ev) {
+        dz.addEventListener(ev, function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+      });
+
+      dz.addEventListener("drop", function (e) {
+        e.preventDefault();
+        var f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) setPreview(f);
+      });
+
+      clearBtn.addEventListener("click", function () {
+        currentFile = null;
+        fileInput.value = "";
+        if (currentPreviewUrl) {
+          URL.revokeObjectURL(currentPreviewUrl);
+          currentPreviewUrl = "";
+        }
+        preview.classList.remove("visible");
+        preview.setAttribute("aria-hidden", "true");
+        previewImg.removeAttribute("src");
+        closeImageModal();
+        searchBtn.disabled = true;
+        hideStatuses();
+        resultsSection.style.display = "none";
+      });
+
+      previewImg.addEventListener("click", openImageModal);
+
+      modalZoomOutBtn.addEventListener("click", function () {
+        setModalZoom(modalZoomLevel - ZOOM_STEP);
+      });
+
+      modalZoomInBtn.addEventListener("click", function () {
+        setModalZoom(modalZoomLevel + ZOOM_STEP);
+      });
+
+      modalCloseBtn.addEventListener("click", closeImageModal);
+
+      imgModal.addEventListener("click", function (e) {
+        if (e.target === imgModal) closeImageModal();
+      });
+
+      document.addEventListener("keydown", function (e) {
+        if (!imgModal.classList.contains("visible")) return;
+        if (e.key === "Escape") closeImageModal();
+        if (e.key === "+" || e.key === "=") setModalZoom(modalZoomLevel + ZOOM_STEP);
+        if (e.key === "-") setModalZoom(modalZoomLevel - ZOOM_STEP);
+      });
+
+      function renderRows(rows) {
+        tbody.innerHTML = "";
+        rows.forEach(function (r) {
+          var tr = document.createElement("tr");
+          tr.innerHTML =
+            "<td>" +
+            escapeHtml(String(r.rank)) +
+            "</td><td>" +
+            escapeHtml(String(r.species)) +
+            '</td><td class="score">' +
+            escapeHtml(formatScore(r.score)) +
+            "</td><td>" +
+            escapeHtml(String(r.specimen_id != null ? r.specimen_id : "—")) +
+            "</td>";
+          tbody.appendChild(tr);
+        });
+        resultsSection.style.display = "block";
+      }
+
+      function escapeHtml(s) {
+        return s
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function formatScore(x) {
+        if (typeof x !== "number" || isNaN(x)) return String(x);
+        return x.toFixed(4);
+      }
+
+      function demoResults() {
+        return [
+          { rank: 1, species: "acuminata", score: 0.9124, specimen_id: "CAL0000796795 (demo)" },
+          { rank: 2, species: "indicum", score: 0.8341, specimen_id: "CAL0000793382 (demo)" },
+          { rank: 3, species: "myxa", score: 0.7102, specimen_id: "— (demo)" },
+        ];
+      }
+
+      searchBtn.addEventListener("click", function () {
+        if (!currentFile) return;
+        hideStatuses();
+        showDemoBanner();
+        statusInfo.textContent = "Searching…";
+        statusInfo.classList.add("visible");
+        searchBtn.disabled = true;
+
+        function finish(rows, errMsg) {
+          statusInfo.classList.remove("visible");
+          statusInfo.textContent = "";
+          searchBtn.disabled = false;
+          if (errMsg) {
+            statusErr.textContent = errMsg;
+            statusErr.classList.add("visible");
+            return;
+          }
+          if (!rows || !rows.length) {
+            statusErr.textContent = "Empty result list.";
+            statusErr.classList.add("visible");
+            return;
+          }
+          renderRows(rows);
+        }
+
+        if (!API_URL) {
+          window.setTimeout(function () {
+            finish(demoResults());
+          }, 450);
+          return;
+        }
+
+        var fd = new FormData();
+        fd.append("image", currentFile, currentFile.name);
+
+        fetch(API_URL, { method: "POST", body: fd })
+          .then(function (res) {
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            return res.json();
+          })
+          .then(function (data) {
+            var rows = data.results || data.matches || data.top_k;
+            if (!Array.isArray(rows)) throw new Error("Response missing results array");
+            finish(rows);
+          })
+          .catch(function (e) {
+            finish(null, e.message || String(e));
+          });
+      });
+
+      showDemoBanner();
+    })();
+  </script>
+</body>
+</html>
