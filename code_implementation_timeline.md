@@ -26,6 +26,11 @@ This timeline is based on current file modification timestamps in `dinov2/*.py`.
    - Latest training implementation update.
    - Two-phase fine-tuning with balanced per-class batching and test/confusion-matrix reporting.
 
+7. `2026-05-06 23:34:00` - `train_dino_model.py`, `../efficient_v2/train_efficientnetv2.py`
+   - Added hard negative mining via batch-hard triplet loss on normalized embeddings.
+   - Training loss updated to `CrossEntropy + HNM_WEIGHT * TripletLoss` (train only).
+   - Replaced `torch.cdist` pairwise distance with cosine-distance matrix (`1 - emb @ emb.T`) for MPS-safe backward pass.
+
 ## Current Implementation Snapshot
 
 Primary production flow:

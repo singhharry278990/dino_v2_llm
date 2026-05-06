@@ -16,6 +16,7 @@ import numpy as np
 import seaborn as sns
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.preprocessing import LabelEncoder
 from torch.optim import AdamW
@@ -43,6 +44,8 @@ TRAIN_IMAGES_PER_CLASS = 2
 
 # CE with label smoothing (same as EfficientNet script)
 LABEL_SMOOTHING = 0.1
+HNM_MARGIN = 0.3
+HNM_WEIGHT = 0.5
 
 OUT_CKPT_FINAL = "herbarium_dinov2_final.pth"
 OUT_CKPT_BEST = "best_dino_model.pth"
@@ -133,15 +136,51 @@ class Model(nn.Module):
         return feat, logits
 
 
-def run_epoch(model, loader, criterion, device, optimizer=None):
+def batch_hard_triplet_loss(embeddings, labels, margin=0.3):
+    """
+    Batch-hard triplet loss:
+      - hardest positive: farthest sample with same class
+      - hardest negative: closest sample from different class
+    """
+    labels = labels.view(-1)
+    embeddings = F.normalize(embeddings, dim=1)
+
+    # Avoid torch.cdist backward on MPS by using cosine-distance matrix:
+    # d(a, b) = 1 - cos(a, b), equivalent ranking to Euclidean on unit vectors.
+    similarities = embeddings @ embeddings.t()
+    distances = 1.0 - similarities
+    n = labels.size(0)
+    eye = torch.eye(n, device=labels.device, dtype=torch.bool)
+
+    pos_mask = labels.unsqueeze(0).eq(labels.unsqueeze(1)) & ~eye
+    neg_mask = ~labels.unsqueeze(0).eq(labels.unsqueeze(1))
+
+    hardest_pos = torch.where(
+        pos_mask, distances, torch.full_like(distances, float("-inf"))
+    ).max(dim=1).values
+    hardest_neg = torch.where(
+        neg_mask, distances, torch.full_like(distances, float("inf"))
+    ).min(dim=1).values
+
+    valid_anchors = pos_mask.any(dim=1) & neg_mask.any(dim=1)
+    if not valid_anchors.any():
+        return torch.zeros((), device=embeddings.device)
+
+    losses = F.relu(hardest_pos[valid_anchors] - hardest_neg[valid_anchors] + margin)
+    return losses.mean()
+
+
+def run_epoch(model, loader, criterion, device, optimizer=None, hnm_margin=0.3, hnm_weight=0.0):
     is_train = optimizer is not None
     model.train() if is_train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
     with torch.set_grad_enabled(is_train):
         for imgs, labels in loader:
             imgs, labels = imgs.to(device), labels.to(device)
-            _, logits = model(imgs)
-            loss = criterion(logits, labels)
+            feats, logits = model(imgs)
+            ce_loss = criterion(logits, labels)
+            hnm_loss = batch_hard_triplet_loss(feats, labels, margin=hnm_margin)
+            loss = ce_loss + (hnm_weight * hnm_loss if is_train else 0.0)
             if is_train:
                 optimizer.zero_grad()
                 loss.backward()
@@ -243,6 +282,7 @@ def main():
     print(f"Backbone: {DINO_BACKBONE}  |  Classes: {class_names}")
     print(f"Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}")
     print(f"Train batch composition: {TRAIN_IMAGES_PER_CLASS} images/species (batch size {num_classes * TRAIN_IMAGES_PER_CLASS})")
+    print(f"Hard negative mining: batch-hard triplet, margin={HNM_MARGIN}, weight={HNM_WEIGHT}")
 
     model = Model(num_classes).to(device)
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
@@ -261,7 +301,15 @@ def main():
 
     best_val_acc, best_state = 0.0, None
     for epoch in range(1, PHASE1_EPOCHS + 1):
-        tr_loss, tr_acc = run_epoch(model, train_loader, criterion, device, optimizer)
+        tr_loss, tr_acc = run_epoch(
+            model,
+            train_loader,
+            criterion,
+            device,
+            optimizer,
+            hnm_margin=HNM_MARGIN,
+            hnm_weight=HNM_WEIGHT,
+        )
         vl_loss, vl_acc = run_epoch(model, val_loader, criterion, device)
         scheduler.step()
         if vl_acc > best_val_acc:
@@ -285,7 +333,15 @@ def main():
 
     best_val_acc, best_state = 0.0, None
     for epoch in range(1, PHASE2_EPOCHS + 1):
-        tr_loss, tr_acc = run_epoch(model, train_loader, criterion, device, optimizer)
+        tr_loss, tr_acc = run_epoch(
+            model,
+            train_loader,
+            criterion,
+            device,
+            optimizer,
+            hnm_margin=HNM_MARGIN,
+            hnm_weight=HNM_WEIGHT,
+        )
         vl_loss, vl_acc = run_epoch(model, val_loader, criterion, device)
         scheduler.step()
         if vl_acc > best_val_acc:

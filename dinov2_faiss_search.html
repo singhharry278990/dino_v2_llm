@@ -358,6 +358,72 @@
       color: var(--accent);
     }
 
+    .subtle {
+      color: var(--muted);
+      font-size: 0.83rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .species-block {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 0.9rem;
+      overflow: hidden;
+    }
+
+    .species-header {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto auto auto;
+      gap: 0.65rem;
+      align-items: center;
+      padding: 0.65rem 0.75rem;
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.82rem;
+    }
+
+    .species-name {
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .species-meta {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .species-toggle {
+      padding: 0.35rem 0.6rem;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .species-toggle:hover {
+      border-color: var(--muted);
+    }
+
+    .species-table-wrap {
+      display: none;
+      overflow-x: auto;
+      padding: 0.2rem 0.5rem 0.5rem;
+    }
+
+    .species-table-wrap.visible {
+      display: block;
+    }
+
+    @media (max-width: 880px) {
+      .species-header {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
     footer {
       margin-top: 2.5rem;
       font-size: 0.8rem;
@@ -415,20 +481,9 @@
     </div>
 
     <section class="card results" id="resultsSection" style="display:none;">
-      <h3>Top matches</h3>
-      <div style="overflow-x:auto;">
-        <table>
-          <thead>
-            <tr>
-              <th>Rank</th>
-              <th>Species</th>
-              <th>Score</th>
-              <th>Specimen / id</th>
-            </tr>
-          </thead>
-          <tbody id="tbody"></tbody>
-        </table>
-      </div>
+      <h3>Top matches (species grouped)</h3>
+      <div class="subtle" id="resultsMeta"></div>
+      <div id="speciesSummary"></div>
     </section>
 
     <footer>
@@ -485,7 +540,8 @@
       const statusWarn = document.getElementById("statusWarn");
       const statusErr = document.getElementById("statusErr");
       const resultsSection = document.getElementById("resultsSection");
-      const tbody = document.getElementById("tbody");
+      const resultsMeta = document.getElementById("resultsMeta");
+      const speciesSummary = document.getElementById("speciesSummary");
 
       let currentFile = null;
       let currentPreviewUrl = "";
@@ -550,6 +606,8 @@
         hideStatuses();
         showDemoBanner();
         resultsSection.style.display = "none";
+        resultsMeta.textContent = "";
+        speciesSummary.innerHTML = "";
       }
 
       dz.addEventListener("click", function () {
@@ -595,6 +653,8 @@
         searchBtn.disabled = true;
         hideStatuses();
         resultsSection.style.display = "none";
+        resultsMeta.textContent = "";
+        speciesSummary.innerHTML = "";
       });
 
       previewImg.addEventListener("click", openImageModal);
@@ -620,24 +680,97 @@
         if (e.key === "-") setModalZoom(modalZoomLevel - ZOOM_STEP);
       });
 
-      function renderRows(rows) {
-        tbody.innerHTML = "";
-        rows.forEach(function (r) {
-          var tr = document.createElement("tr");
-          tr.innerHTML =
-            "<td>" +
-            escapeHtml(String(r.rank)) +
-            "</td><td>" +
-            escapeHtml(String(r.species)) +
-            '</td><td class="score">' +
-            escapeHtml(formatScore(r.score)) +
-            "</td><td>" +
-            escapeHtml(String(r.specimen_id != null ? r.specimen_id : "—")) +
-            "</td>";
-          tbody.appendChild(tr);
+      function groupRowsBySpecies(rows) {
+        var map = new Map();
+        rows.forEach(function (row) {
+          var key = row.species || "unknown";
+          if (!map.has(key)) map.set(key, []);
+          map.get(key).push(row);
         });
+
+        return Array.from(map.entries()).map(function (entry) {
+          var species = entry[0];
+          var items = entry[1].slice().sort(function (a, b) { return a.rank - b.rank; });
+          var scores = items.map(function (x) { return Number(x.score) || 0; });
+          var total = scores.reduce(function (acc, x) { return acc + x; }, 0);
+          var bestRank = items.reduce(function (best, x) { return Math.min(best, x.rank || Number.MAX_SAFE_INTEGER); }, Number.MAX_SAFE_INTEGER);
+          return {
+            species: species,
+            count: items.length,
+            avg_score: total / Math.max(1, items.length),
+            max_score: Math.max.apply(null, scores),
+            min_score: Math.min.apply(null, scores),
+            best_rank: bestRank,
+            specimens: items
+          };
+        }).sort(function (a, b) {
+          if (b.avg_score !== a.avg_score) return b.avg_score - a.avg_score;
+          if (a.best_rank !== b.best_rank) return a.best_rank - b.best_rank;
+          return a.species.localeCompare(b.species);
+        });
+      }
+
+      function renderSpeciesSummary(rows, summaryFromApi) {
+        var groups = Array.isArray(summaryFromApi) && summaryFromApi.length ? summaryFromApi : groupRowsBySpecies(rows);
+        speciesSummary.innerHTML = "";
+        var uniqueSpecies = groups.length;
+        var avgAll = rows.reduce(function (acc, r) { return acc + (Number(r.score) || 0); }, 0) / Math.max(1, rows.length);
+        resultsMeta.textContent =
+          "Fetched " + rows.length + " records across " + uniqueSpecies + " species | Overall avg score: " + formatScore(avgAll);
+
+        groups.forEach(function (g, idx) {
+          var wrap = document.createElement("div");
+          wrap.className = "species-block";
+
+          var header = document.createElement("div");
+          header.className = "species-header";
+
+          var detailsId = "species-detail-" + idx;
+          header.innerHTML =
+            '<span class="species-name">' + escapeHtml(String(g.species)) + '</span>' +
+            '<span class="species-meta">Count: ' + escapeHtml(String(g.count)) + '</span>' +
+            '<span class="species-meta">Avg: ' + escapeHtml(formatScore(g.avg_score)) + '</span>' +
+            '<span class="species-meta">Range: ' + escapeHtml(formatScore(g.min_score)) + ' - ' + escapeHtml(formatScore(g.max_score)) + '</span>' +
+            '<span class="species-meta">Best rank: ' + escapeHtml(String(g.best_rank)) + '</span>' +
+            '<button type="button" class="species-toggle" data-target="' + detailsId + '">View all</button>';
+
+          var tableWrap = document.createElement("div");
+          tableWrap.className = "species-table-wrap";
+          tableWrap.id = detailsId;
+
+          var specimens = Array.isArray(g.specimens) ? g.specimens : [];
+          var body = specimens.map(function (s) {
+            return (
+              "<tr>" +
+              "<td>" + escapeHtml(String(s.rank != null ? s.rank : "—")) + "</td>" +
+              '<td class="score">' + escapeHtml(formatScore(s.score)) + "</td>" +
+              "<td>" + escapeHtml(String(s.specimen_id != null ? s.specimen_id : "—")) + "</td>" +
+              "</tr>"
+            );
+          }).join("");
+
+          tableWrap.innerHTML =
+            "<table><thead><tr><th>Rank</th><th>Score</th><th>Specimen / id</th></tr></thead><tbody>" +
+            body +
+            "</tbody></table>";
+
+          wrap.appendChild(header);
+          wrap.appendChild(tableWrap);
+          speciesSummary.appendChild(wrap);
+        });
+
         resultsSection.style.display = "block";
       }
+
+      speciesSummary.addEventListener("click", function (event) {
+        var btn = event.target.closest(".species-toggle");
+        if (!btn) return;
+        var targetId = btn.getAttribute("data-target");
+        var details = targetId ? document.getElementById(targetId) : null;
+        if (!details) return;
+        var isVisible = details.classList.toggle("visible");
+        btn.textContent = isVisible ? "Hide" : "View all";
+      });
 
       function escapeHtml(s) {
         return s
@@ -682,7 +815,7 @@
             statusErr.classList.add("visible");
             return;
           }
-          renderRows(rows);
+          renderSpeciesSummary(rows, lastSpeciesSummary);
         }
 
         if (!API_URL) {
@@ -695,6 +828,8 @@
         var fd = new FormData();
         fd.append("image", currentFile, currentFile.name);
 
+        var lastSpeciesSummary = null;
+
         fetch(API_URL, { method: "POST", body: fd })
           .then(function (res) {
             if (!res.ok) throw new Error("HTTP " + res.status);
@@ -702,6 +837,7 @@
           })
           .then(function (data) {
             var rows = data.results || data.matches || data.top_k;
+            lastSpeciesSummary = data.species_summary || null;
             if (!Array.isArray(rows)) throw new Error("Response missing results array");
             finish(rows);
           })

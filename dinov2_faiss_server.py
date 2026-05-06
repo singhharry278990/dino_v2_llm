@@ -18,6 +18,7 @@ import argparse
 import io
 import json
 import os
+from collections import defaultdict
 from pathlib import Path
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -54,7 +55,39 @@ def load_index_bundle(index_dir: Path):
     return index, metadata
 
 
-def create_app(checkpoint: Path, index_dir: Path, topk_default: int = 10):
+def summarize_by_species(results):
+    grouped = defaultdict(list)
+    for row in results:
+        grouped[row["species"]].append(row)
+
+    summary = []
+    for species, rows in grouped.items():
+        scores = [r["score"] for r in rows]
+        summary.append(
+            {
+                "species": species,
+                "count": len(rows),
+                "avg_score": float(sum(scores) / len(scores)),
+                "max_score": float(max(scores)),
+                "min_score": float(min(scores)),
+                "best_rank": int(min(r["rank"] for r in rows)),
+                "specimens": [
+                    {
+                        "rank": int(r["rank"]),
+                        "score": float(r["score"]),
+                        "specimen_id": r.get("specimen_id"),
+                        "path": r.get("path"),
+                    }
+                    for r in rows
+                ],
+            }
+        )
+
+    summary.sort(key=lambda x: (-x["avg_score"], x["best_rank"], x["species"]))
+    return summary
+
+
+def create_app(checkpoint: Path, index_dir: Path, topk_default: int = 50):
     index, metadata = load_index_bundle(index_dir)
     model, transform, _species, device = load_model(model_path=str(checkpoint))
     model.eval()
@@ -137,7 +170,7 @@ def create_app(checkpoint: Path, index_dir: Path, topk_default: int = 10):
                 }
             )
 
-        return jsonify({"results": results})
+        return jsonify({"results": results, "species_summary": summarize_by_species(results)})
 
     return app
 
@@ -148,7 +181,7 @@ def main():
     ap.add_argument("--index_dir", default="dinov2_faiss_index")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--topk", type=int, default=10)
+    ap.add_argument("--topk", type=int, default=50)
     args = ap.parse_args()
 
     ckpt = Path(args.checkpoint).resolve()
