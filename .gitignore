@@ -1,2 +1,5 @@
 
 herbarium_dinov2_final.pth
+best_dino_model.pth
+encoders.pkl
+__pycache__/

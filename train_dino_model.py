@@ -20,13 +20,13 @@ from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.preprocessing import LabelEncoder
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, Sampler
 from torchvision import datasets, transforms
 
 # ─────────────────────────────────────────
 # CONFIG (mirror train_efficientnetv2.py where sensible)
 # ─────────────────────────────────────────
-DATA_DIR = "./noiseless_datasets"
+DATA_DIR = "../noiseless_datasets"
 
 DINO_BACKBONE = "dinov2_vits14"
 N_UNFROZEN_BLOCKS = 4  # phase 2: last K transformer blocks unfrozen
@@ -39,6 +39,7 @@ LR_PHASE1 = 1e-3
 LR_PHASE2 = 1e-4
 WEIGHT_DECAY = 1e-4
 SEED = 42
+TRAIN_IMAGES_PER_CLASS = 2
 
 # CE with label smoothing (same as EfficientNet script)
 LABEL_SMOOTHING = 0.1
@@ -59,6 +60,42 @@ class TransformSubset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img, lbl = self.subset[idx]
         return self.transform(img), lbl
+
+
+class BalancedPerClassBatchSampler(Sampler):
+    """Yields batches with a fixed number of images per class."""
+
+    def __init__(self, labels, num_classes, images_per_class, seed=42):
+        self.labels = np.array(labels)
+        self.num_classes = num_classes
+        self.images_per_class = images_per_class
+        self.seed = seed
+        self.class_to_indices = {
+            cls_idx: np.where(self.labels == cls_idx)[0].tolist()
+            for cls_idx in range(num_classes)
+        }
+        self.epoch = 0
+
+    def __len__(self):
+        return min(len(idxs) // self.images_per_class for idxs in self.class_to_indices.values())
+
+    def __iter__(self):
+        rng = np.random.default_rng(self.seed + self.epoch)
+        self.epoch += 1
+
+        pools = {}
+        for cls_idx, idxs in self.class_to_indices.items():
+            shuffled = idxs.copy()
+            rng.shuffle(shuffled)
+            pools[cls_idx] = shuffled
+
+        while all(len(pools[cls_idx]) >= self.images_per_class for cls_idx in range(self.num_classes)):
+            batch = []
+            for cls_idx in range(self.num_classes):
+                for _ in range(self.images_per_class):
+                    batch.append(pools[cls_idx].pop())
+            rng.shuffle(batch)
+            yield batch
 
 
 def freeze_backbone(model: nn.Module) -> None:
@@ -173,11 +210,17 @@ def main():
     train_set = TransformSubset(Subset(full_raw, train_idx), train_tf)
     val_set = TransformSubset(Subset(full_raw, val_idx), val_tf)
     test_set = TransformSubset(Subset(full_raw, test_idx), val_tf)
+    train_labels = [full_dataset.samples[i][1] for i in train_idx]
+    train_batch_sampler = BalancedPerClassBatchSampler(
+        labels=train_labels,
+        num_classes=num_classes,
+        images_per_class=TRAIN_IMAGES_PER_CLASS,
+        seed=SEED,
+    )
 
     train_loader = DataLoader(
         train_set,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
+        batch_sampler=train_batch_sampler,
         num_workers=num_workers,
         pin_memory=pin_memory,
     )
@@ -199,6 +242,7 @@ def main():
     class_names = full_dataset.classes
     print(f"Backbone: {DINO_BACKBONE}  |  Classes: {class_names}")
     print(f"Train: {len(train_set)} | Val: {len(val_set)} | Test: {len(test_set)}")
+    print(f"Train batch composition: {TRAIN_IMAGES_PER_CLASS} images/species (batch size {num_classes * TRAIN_IMAGES_PER_CLASS})")
 
     model = Model(num_classes).to(device)
     criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
